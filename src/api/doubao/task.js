@@ -16,6 +16,14 @@ export function createTask(data) {
   })
 }
 
+export function uploadTaskImages(formData) {
+  return request({
+    url: '/api/uploads/images',
+    method: 'post',
+    data: formData
+  })
+}
+
 export function adoptTask(data) {
   return request({
     url: '/api/tasks/adopt',

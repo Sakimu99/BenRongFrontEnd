@@ -10,9 +10,35 @@
           <el-descriptions :column="4" border size="small" v-if="doctor">
             <el-descriptions-item label="服务端口">{{ doctor.env.port }}</el-descriptions-item>
             <el-descriptions-item label="数据目录">{{ doctor.dataDir }}</el-descriptions-item>
-            <el-descriptions-item label="队列 Worker">{{ workerStatusText(doctor.workers && doctor.workers.queue) }}</el-descriptions-item>
-            <el-descriptions-item label="轮询 Worker">{{ workerStatusText(doctor.workers && doctor.workers.polling) }}</el-descriptions-item>
+            <el-descriptions-item label="队列 Worker">{{ workerStatusText(doctor.queue) }}</el-descriptions-item>
+            <el-descriptions-item label="轮询 Worker">{{ workerStatusText(doctor.polling) }}</el-descriptions-item>
           </el-descriptions>
+          <div v-if="doctor && doctor.pollingOverview" class="polling-overview">
+            <div class="polling-overview__row">
+              <el-tag size="mini" :type="pollingWorkerTagType(doctor.pollingOverview.worker)">
+                {{ pollingWorkerSummary(doctor.pollingOverview.worker) }}
+              </el-tag>
+              <el-tag size="mini" type="warning" v-if="doctor.pollingOverview.counts && doctor.pollingOverview.counts.retrying">
+                {{ doctor.pollingOverview.counts.retrying }} 个任务退避中
+              </el-tag>
+              <el-tag size="mini" type="success" v-if="doctor.pollingOverview.worker && doctor.pollingOverview.worker.lastRecoveredCount">
+                最近恢复 {{ doctor.pollingOverview.worker.lastRecoveredCount }} 个
+              </el-tag>
+              <span class="polling-overview__hint" v-if="pollingLastMessage(doctor.pollingOverview)">
+                {{ pollingLastMessage(doctor.pollingOverview) }}
+              </span>
+            </div>
+            <div class="polling-overview__row polling-overview__row--counts">
+              <el-tag size="mini">queued {{ pollingCount('queued') }}</el-tag>
+              <el-tag size="mini" type="info">submitted {{ pollingCount('submitted') }}</el-tag>
+              <el-tag size="mini" type="warning">polling {{ pollingCount('polling') }}</el-tag>
+              <el-tag size="mini" type="success">completed {{ pollingCount('completed') }}</el-tag>
+              <el-tag size="mini" type="danger">failed {{ pollingCount('failed') }}</el-tag>
+            </div>
+            <div class="polling-overview__row polling-overview__row--meta" v-if="pollingMetaText(doctor.pollingOverview)">
+              {{ pollingMetaText(doctor.pollingOverview) }}
+            </div>
+          </div>
         </el-card>
       </el-col>
 
@@ -52,6 +78,8 @@
             <el-table-column label="操作" min-width="180" fixed="right">
               <template slot-scope="scope">
                 <el-button type="text" size="mini" @click="handleCheckAuth(scope.row)" v-hasPermi="['doubao:auth:check']">检查登录</el-button>
+                <el-button type="text" size="mini" @click="handleStartVerification(scope.row)" v-if="scope.row.status === 'verification_required'">开始验证</el-button>
+                <el-button type="text" size="mini" @click="handleRecoverVerification(scope.row)" v-if="scope.row.status === 'verification_required'">验证完成</el-button>
                 <el-button type="text" size="mini" @click="handleRefreshQuota(scope.row)" v-hasPermi="['doubao:quota:refresh']">刷新额度</el-button>
                 <el-button type="text" size="mini" @click="handlePickAccount(scope.row)">选中</el-button>
               </template>
@@ -80,6 +108,12 @@
                 <el-radio-button label="video">视频</el-radio-button>
               </el-radio-group>
             </el-form-item>
+            <el-form-item label="视频时长" v-if="taskForm.taskType === 'video'">
+              <el-radio-group v-model="taskForm.videoDurationSec">
+                <el-radio-button :label="5">5 秒</el-radio-button>
+                <el-radio-button :label="10">10 秒</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
             <el-form-item label="指定账号">
               <el-select v-model="taskForm.accountId" clearable placeholder="留空则自动选号" style="width: 100%">
                 <el-option v-for="item in accounts" :key="item.id" :label="item.label + ' (' + item.id + ')'" :value="item.id" />
@@ -87,6 +121,35 @@
             </el-form-item>
             <el-form-item label="Prompt" prop="promptText">
               <el-input v-model="taskForm.promptText" type="textarea" :rows="5" placeholder="请输入图片或视频描述" />
+            </el-form-item>
+            <el-form-item label="参考图" v-if="taskForm.taskType === 'image'">
+              <el-upload
+                action="#"
+                multiple
+                :limit="4"
+                list-type="text"
+                :auto-upload="false"
+                :http-request="noopUploadRequest"
+                :file-list="referenceImageFiles"
+                :on-change="handleReferenceImageChange"
+                :on-remove="handleReferenceImageRemove">
+                <el-button size="mini">选择图片</el-button>
+                <div slot="tip" class="el-upload__tip">最多 4 张，仅支持图片文件。</div>
+              </el-upload>
+            </el-form-item>
+            <el-form-item label="基底图" v-if="taskForm.taskType === 'video'">
+              <el-upload
+                action="#"
+                :limit="1"
+                list-type="text"
+                :auto-upload="false"
+                :http-request="noopUploadRequest"
+                :file-list="baseImageFiles"
+                :on-change="handleBaseImageChange"
+                :on-remove="handleBaseImageRemove">
+                <el-button size="mini">选择图片</el-button>
+                <div slot="tip" class="el-upload__tip">视频任务可选 1 张基底图。</div>
+              </el-upload>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" size="mini" @click="handleCreateTask" v-hasPermi="['doubao:task:submit']">提交任务</el-button>
@@ -151,8 +214,8 @@
 </template>
 
 <script>
-import { createAccount, listAccounts, checkAccountAuth, refreshAccountQuota, refreshAllAccountQuotas } from '@/api/doubao/account'
-import { createTask, listTasks, pollTask, resetTask, dispatchTaskOnce, listTaskAssets, downloadTaskAssets, openTaskFile } from '@/api/doubao/task'
+import { createAccount, listAccounts, checkAccountAuth, startAccountVerification, recoverAccountVerification, refreshAccountQuota, refreshAllAccountQuotas } from '@/api/doubao/account'
+import { createTask, listTasks, pollTask, resetTask, dispatchTaskOnce, listTaskAssets, downloadTaskAssets, openTaskFile, uploadTaskImages } from '@/api/doubao/task'
 import { getDoctor } from '@/api/doubao/system'
 
 export default {
@@ -166,6 +229,8 @@ export default {
       tasks: [],
       assets: [],
       currentTask: null,
+      referenceImageFiles: [],
+      baseImageFiles: [],
       accountForm: {
         accountId: undefined,
         label: undefined
@@ -173,6 +238,7 @@ export default {
       taskForm: {
         mode: 'submit',
         taskType: 'video',
+        videoDurationSec: 5,
         accountId: undefined,
         promptText: ''
       },
@@ -233,6 +299,18 @@ export default {
         this.loadAccounts()
       })
     },
+    handleStartVerification(row) {
+      startAccountVerification(row.id).then(() => {
+        this.$modal.msgSuccess('验证窗口已打开，请在浏览器中完成人工验证')
+        this.loadAccounts()
+      })
+    },
+    handleRecoverVerification(row) {
+      recoverAccountVerification(row.id).then(() => {
+        this.$modal.msgSuccess('账号已恢复并重新加入号池')
+        this.loadAccounts()
+      })
+    },
     handleRefreshQuota(row) {
       refreshAccountQuota(row.id).then(() => {
         this.$modal.msgSuccess('额度刷新成功')
@@ -250,10 +328,11 @@ export default {
       this.$modal.msgSuccess('已选中账号 ' + row.id)
     },
     handleCreateTask() {
-      this.$refs.taskFormRef.validate(valid => {
+      this.$refs.taskFormRef.validate(async valid => {
         if (!valid) {
           return
         }
+        const uploaded = await this.uploadTaskMaterials()
         createTask({
           mode: this.taskForm.mode,
           taskType: this.taskForm.taskType,
@@ -261,11 +340,16 @@ export default {
           promptText: this.taskForm.promptText,
           submitPayload: {
             prompt: this.taskForm.promptText,
-            type: this.taskForm.taskType
+            type: this.taskForm.taskType,
+            referenceImages: this.taskForm.taskType === 'image' ? uploaded.referenceImages : undefined,
+            baseImage: this.taskForm.taskType === 'video' ? uploaded.baseImage : undefined,
+            videoDurationSec: this.taskForm.taskType === 'video' ? this.taskForm.videoDurationSec : undefined
           }
         }).then(() => {
           this.$modal.msgSuccess('任务已提交')
           this.taskForm.promptText = ''
+          this.referenceImageFiles = []
+          this.baseImageFiles = []
           this.loadTasks()
         })
       })
@@ -320,6 +404,40 @@ export default {
         }, 60000)
       })
     },
+    async uploadTaskMaterials() {
+      if (this.taskForm.taskType === 'image') {
+        const tokens = await this.uploadFiles(this.referenceImageFiles, 'referenceImages')
+        return { referenceImages: tokens, baseImage: undefined }
+      }
+      const tokens = await this.uploadFiles(this.baseImageFiles, 'baseImage')
+      return { referenceImages: undefined, baseImage: tokens[0] }
+    },
+    async uploadFiles(fileList, fieldName) {
+      if (!fileList || !fileList.length) {
+        return []
+      }
+      const formData = new FormData()
+      fileList.forEach(file => {
+        const rawFile = file.raw || file
+        formData.append(fieldName, rawFile, rawFile.name)
+      })
+      const res = await uploadTaskImages(formData)
+      return ((res && res.data && res.data.files) || []).map(item => item.token)
+    },
+    noopUploadRequest() {
+    },
+    handleReferenceImageChange(file, fileList) {
+      this.referenceImageFiles = fileList.slice(-4)
+    },
+    handleReferenceImageRemove(file, fileList) {
+      this.referenceImageFiles = fileList
+    },
+    handleBaseImageChange(file, fileList) {
+      this.baseImageFiles = fileList.slice(-1)
+    },
+    handleBaseImageRemove(file, fileList) {
+      this.baseImageFiles = fileList
+    },
     quotaText(row) {
       const status = row.videoQuotaStatus || 'unknown'
       const remaining = row.videoQuotaRemaining
@@ -332,6 +450,9 @@ export default {
     accountStatusType(status) {
       if (status === 'active') {
         return 'success'
+      }
+      if (status === 'verification_required') {
+        return 'danger'
       }
       if (status === 'relogin_required') {
         return 'warning'
@@ -355,6 +476,79 @@ export default {
         return 'unknown'
       }
       return worker.enabled ? `运行中 / ${worker.iterations || 0}` : '未启用'
+    },
+    pollingCount(status) {
+      const counts = this.doctor && this.doctor.pollingOverview && this.doctor.pollingOverview.counts
+      return (counts && counts[status]) || 0
+    },
+    pollingWorkerTagType(worker) {
+      if (!worker || !worker.enabled) {
+        return 'info'
+      }
+      if (worker.lastError) {
+        return 'danger'
+      }
+      if (worker.lastRecoveredCount) {
+        return 'warning'
+      }
+      return 'success'
+    },
+    pollingWorkerSummary(worker) {
+      if (!worker || !worker.enabled) {
+        return '轮询未启用'
+      }
+      if (worker.lastError) {
+        return '轮询最近有错误'
+      }
+      if (worker.running) {
+        return '轮询运行中'
+      }
+      return '轮询空闲中'
+    },
+    pollingLastMessage(overview) {
+      const worker = overview && overview.worker
+      if (!worker) {
+        return ''
+      }
+      if (worker.lastError) {
+        return `最近错误：${worker.lastError}`
+      }
+      if (worker.lastRecoveredAt) {
+        return `最近自动恢复：${this.formatDateTime(worker.lastRecoveredAt)}`
+      }
+      if (worker.lastSuccessAt) {
+        return `最近正常轮询：${this.formatDateTime(worker.lastSuccessAt)}`
+      }
+      return ''
+    },
+    pollingMetaText(overview) {
+      if (!overview) {
+        return ''
+      }
+      const texts = []
+      const retry = overview.retry || {}
+      const worker = overview.worker || {}
+      if (retry.nearestRetryAt) {
+        texts.push(`下一次重试：${this.formatDateTime(retry.nearestRetryAt)}`)
+      }
+      if (worker.lastRecoveredAt) {
+        texts.push(`最近恢复：${this.formatDateTime(worker.lastRecoveredAt)}`)
+      }
+      if (worker.recoveredTotal) {
+        texts.push(`累计恢复 ${worker.recoveredTotal} 次`)
+      }
+      return texts.join(' ｜ ')
+    },
+    formatDateTime(value) {
+      if (!value) {
+        return '--'
+      }
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) {
+        return value
+      }
+      const pad = num => String(num).padStart(2, '0')
+      return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
     }
   }
 }
@@ -363,5 +557,30 @@ export default {
 <style scoped>
 .card-box {
   margin-bottom: 12px;
+}
+
+.polling-overview {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #f8f9fb;
+  border: 1px solid #ebeef5;
+  border-radius: 4px;
+}
+
+.polling-overview__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.polling-overview__row + .polling-overview__row {
+  margin-top: 8px;
+}
+
+.polling-overview__row--meta,
+.polling-overview__hint {
+  color: #909399;
+  font-size: 12px;
 }
 </style>

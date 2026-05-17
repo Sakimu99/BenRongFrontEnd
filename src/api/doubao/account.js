@@ -29,6 +29,20 @@ export function checkAccountAuth(accountId) {
   })
 }
 
+export function startAccountVerification(accountId) {
+  return request({
+    url: `/api/accounts/${accountId}/verification/start`,
+    method: 'post'
+  })
+}
+
+export function recoverAccountVerification(accountId) {
+  return request({
+    url: `/api/accounts/${accountId}/verification/recover`,
+    method: 'post'
+  })
+}
+
 export function refreshAccountQuota(accountId) {
   return request({
     url: `/api/accounts/${accountId}/quota/refresh`,

@@ -10,10 +10,19 @@ const service = axios.create({
 })
 
 service.interceptors.request.use(config => {
-  const isToken = (config.headers || {}).isToken === false
-  if (getToken() && !isToken) {
-    config.headers['Authorization'] = 'Bearer ' + getToken()
+  const headers = config.headers || {}
+  const isToken = headers.isToken === false
+
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+    delete headers['Content-Type']
+    delete headers['content-type']
   }
+
+  if (getToken() && !isToken) {
+    headers['Authorization'] = 'Bearer ' + getToken()
+  }
+
+  config.headers = headers
   return config
 }, error => {
   return Promise.reject(error)
