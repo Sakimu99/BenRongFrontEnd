@@ -10,6 +10,7 @@ const CompressionPlugin = require('compression-webpack-plugin')
 const name = process.env.VUE_APP_TITLE || '若依管理系统' // 网页标题
 
 const baseUrl = 'http://localhost:8080' // 后端接口
+const doubaoBaseUrl = 'http://localhost:18081' // DouBao 接口
 
 const port = process.env.port || process.env.npm_config_port || 80 // 端口
 
@@ -40,6 +41,13 @@ module.exports = {
         changeOrigin: true,
         pathRewrite: {
           ['^' + process.env.VUE_APP_BASE_API]: ''
+        }
+      },
+      [process.env.VUE_APP_DOUBAO_API]: {
+        target: doubaoBaseUrl,
+        changeOrigin: true,
+        pathRewrite: {
+          ['^' + process.env.VUE_APP_DOUBAO_API]: ''
         }
       },
       // springdoc proxy
