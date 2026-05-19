@@ -43,6 +43,14 @@ export function recoverAccountVerification(accountId) {
   })
 }
 
+export function setAccountQuota(accountId, data) {
+  return request({
+    url: `/api/accounts/${accountId}/quota/set`,
+    method: 'post',
+    data
+  })
+}
+
 export function refreshAccountQuota(accountId) {
   return request({
     url: `/api/accounts/${accountId}/quota/refresh`,

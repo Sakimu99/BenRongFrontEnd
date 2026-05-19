@@ -54,6 +54,14 @@ export function resetTask(taskId, data) {
   })
 }
 
+export function terminateTask(taskId, data) {
+  return request({
+    url: `/api/tasks/${taskId}/terminate`,
+    method: 'post',
+    data
+  })
+}
+
 export function dispatchTaskOnce() {
   return request({
     url: '/api/tasks/dispatch-once',
